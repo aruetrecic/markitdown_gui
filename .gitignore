@@ -221,8 +221,26 @@ __marimo__/
 .claude/
 CLAUDE.md
 
-# Documentos de prueba privados (PII real) y residuos de WSL
+# Documentos de prueba privados (PII real) y residuos de WSL.
+# Se excluyen por extensión los formatos de entrada que usamos como muestras:
+# pueden contener datos personales reales y no deben publicarse. NO se excluyen
+# .png ni .md porque docs/ contiene capturas y notas de documentación legítimas.
 docs/*.pdf
+docs/*.docx
+docs/*.doc
+docs/*.pptx
+docs/*.ppt
+docs/*.xlsx
+docs/*.xls
+docs/*.csv
+docs/*.mp3
+docs/*.wav
+docs/*.m4a
+docs/*.jpg
+docs/*.jpeg
+docs/*.gif
+docs/*.bmp
+docs/*.webp
 *:Zone.Identifier
 
 # Brainstorm visual companion
