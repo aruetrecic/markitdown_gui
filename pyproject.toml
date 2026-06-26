@@ -33,6 +33,17 @@ dev = [
 [tool.uv]
 package = false
 
+[tool.pytest.ini_options]
+# Solo se silencia ruido de librerías/infra de test, NO warnings de este código:
+#  - httpx marca como deprecado el atajo `app=` que usa fastapi.testclient en
+#    esta versión (FastAPI 0.109); es ajeno a nuestro código.
+#  - GZipMiddleware + TestClient deja un objeto gzip que, al recolectarse,
+#    lanza "I/O operation on closed file"; pytest lo reporta como unraisable.
+filterwarnings = [
+    "ignore:The 'app' shortcut is now deprecated:DeprecationWarning",
+    "ignore::pytest.PytestUnraisableExceptionWarning",
+]
+
 [tool.black]
 line-length = 100
 target-version = ['py310']
@@ -40,3 +51,11 @@ target-version = ['py310']
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+
+[tool.ruff.lint]
+# E/F: pycodestyle + pyflakes (por defecto). I: orden de imports.
+# UP: modernización de sintaxis (typing nativo). B: bugbear (errores sutiles).
+select = ["E", "F", "I", "UP", "B"]
+# B008: usar File()/Form()/Depends() como valores por defecto es el patrón
+# idiomático de FastAPI (inyección de dependencias), no un bug.
+ignore = ["B008"]
