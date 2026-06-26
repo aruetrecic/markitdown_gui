@@ -28,21 +28,31 @@ sudo dnf install -y \
   git curl
 
 # 2. uv (gestor de paquetes de Python)
+#    uv gestiona su propio Python: aunque el sistema traiga una versión muy nueva
+#    (p. ej. Fedora 43 trae 3.14, sin wheels de spaCy 3.8), uv baja un Python
+#    compatible (3.13) al sincronizar. Por eso el python3 del sistema es solo un
+#    respaldo.
+uv_recien_instalado=0
 if ! command -v uv >/dev/null 2>&1; then
   echo "==> Instalando uv..."
   curl -LsSf https://astral.sh/uv/install.sh | sh
   export PATH="$HOME/.local/bin:$PATH"
+  uv_recien_instalado=1
 fi
 
-# 3. Dependencias de Python (incluye el modelo de spaCy, ~570 MB: puede tardar)
+# 3. Dependencias de Python (set de producción; incluye el modelo de spaCy,
+#    ~570 MB: puede tardar). Para las herramientas de desarrollo: uv sync --all-extras
 echo "==> Sincronizando dependencias de Python con uv..."
-uv sync --all-extras
+uv sync
 
 # 4. Verificación rápida
 echo "==> Verificando instalación..."
 tesseract --version | head -n 1
 ffmpeg -version | head -n 1
 uv run python -c "import markitdown, pymupdf4llm, pytesseract, presidio_analyzer; print('Dependencias de Python OK')"
+# El modelo de spaCy es la pieza grande y frágil: si no se descargó, el import de
+# arriba pasa igual pero la anonimización fallaría en runtime. Lo cargamos aquí.
+uv run python -c "import spacy; spacy.load('es_core_news_lg'); print('Modelo spaCy es_core_news_lg OK')"
 
 cat <<'EOF'
 
@@ -54,3 +64,11 @@ Arranca la aplicación con:
 
 Luego abre http://localhost:8000
 EOF
+
+if [ "$uv_recien_instalado" = "1" ]; then
+  cat <<'EOF'
+
+⚠️  Se acaba de instalar uv. Si './run.sh' dice "uv: command not found",
+   abre una terminal nueva o ejecuta primero:  source ~/.bashrc
+EOF
+fi
