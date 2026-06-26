@@ -42,9 +42,7 @@ def ocr_image(path: str, lang: str = DEFAULT_LANG) -> str:
         import pytesseract
         from PIL import Image
     except ImportError as e:  # pragma: no cover - depende del entorno
-        raise ImportError(
-            "OCR no disponible: faltan pytesseract/Pillow. Ejecuta 'uv sync'."
-        ) from e
+        raise ImportError("OCR no disponible: faltan pytesseract/Pillow. Ejecuta 'uv sync'.") from e
 
     try:
         with Image.open(path) as img:

@@ -3,15 +3,14 @@ import os
 import tempfile
 import zipfile
 from pathlib import Path
-from typing import List
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Form
-from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse, FileResponse, Response
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
 import uvicorn
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 from markitdown import MarkItDown
+from pydantic import BaseModel, Field
 
 from backend import compactor, ocr, pdf_markdown
 
@@ -46,7 +45,8 @@ async def add_no_cache_headers(request: Request, call_next):
     return response
 
 
-# Plugins desactivados: cargarían cualquier paquete instalado y amplían superficie sin necesidad real aquí
+# Plugins desactivados: cargarían cualquier paquete instalado y amplían
+# la superficie de ataque sin necesidad real aquí.
 md = MarkItDown(enable_plugins=False)
 
 
@@ -195,6 +195,11 @@ SUPPORTED_EXTENSIONS = {
 }
 
 
+def _unsupported_format_msg() -> str:
+    """Mensaje de error para una extensión no soportada (listando las válidas)."""
+    return f"Format not supported. Supported formats: {', '.join(SUPPORTED_EXTENSIONS.keys())}"
+
+
 @app.get("/")
 async def root():
     """Servir la página principal"""
@@ -226,7 +231,7 @@ async def get_anonymizer_options():
 @app.post("/api/convert")
 async def convert_files(
     request: Request,
-    files: List[UploadFile] = File(...),
+    files: list[UploadFile] = File(...),
     anonymize: bool = Form(False),
     anonymize_entities: str = Form(""),
     compact: bool = Form(True),
@@ -257,12 +262,7 @@ async def convert_files(
             file_extension = Path(file.filename or "").suffix.lower()
 
             if file_extension not in SUPPORTED_EXTENSIONS:
-                errors.append(
-                    {
-                        "filename": safe_name,
-                        "error": f"Format not supported. Supported formats: {', '.join(SUPPORTED_EXTENSIONS.keys())}",
-                    }
-                )
+                errors.append({"filename": safe_name, "error": _unsupported_format_msg()})
                 continue
 
             try:
@@ -332,10 +332,7 @@ async def convert_single_file(
         file_extension = Path(file.filename or "").suffix.lower()
 
         if file_extension not in SUPPORTED_EXTENSIONS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Format not supported. Supported formats: {', '.join(SUPPORTED_EXTENSIONS.keys())}",
-            )
+            raise HTTPException(status_code=400, detail=_unsupported_format_msg())
 
         try:
             tmp_path = await _stream_to_tempfile(file, file_extension)
@@ -343,7 +340,7 @@ async def convert_single_file(
             raise HTTPException(
                 status_code=413,
                 detail=f"File too large (max {MAX_FILE_SIZE // (1024 * 1024)} MB)",
-            )
+            ) from None
 
         try:
             filename_without_ext = _safe_filename(Path(file.filename or "").stem)
@@ -353,14 +350,14 @@ async def convert_single_file(
                 raise HTTPException(
                     status_code=503,
                     detail=f"OCR no disponible: {e}",
-                )
+                ) from e
             try:
                 text_content = _apply_anonymization(raw_text, anonymize, entities)
             except (ImportError, OSError) as e:
                 raise HTTPException(
                     status_code=503,
                     detail=f"Anonimización no disponible: {e}",
-                )
+                ) from e
 
             original_chars = len(text_content)
             text_content = _compact(text_content, compact)
@@ -387,7 +384,7 @@ async def convert_single_file(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 class ZipFileEntry(BaseModel):
@@ -396,7 +393,7 @@ class ZipFileEntry(BaseModel):
 
 
 class ZipRequest(BaseModel):
-    files: List[ZipFileEntry]
+    files: list[ZipFileEntry]
 
 
 def _unique_zip_name(name: str, taken: set[str]) -> str:
@@ -447,4 +444,6 @@ async def create_zip(request: Request, payload: ZipRequest):
 
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    # Ruta de import completa: el módulo es backend.main, no main, así que
+    # `uv run python -m backend.main` resuelve la app correctamente con reload.
+    uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)
