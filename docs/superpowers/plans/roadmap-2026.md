@@ -28,7 +28,7 @@ nombres, gzip, no-cache.
 on-device); OCR de idioma fijo y sin detección de PDF escaneado; PII sin informe
 de lo redactado, sin términos propios, sin etiquetas coherentes; tokens solo
 heurísticos sin coste; salida solo `.md`; despliegue público sin rate limiting /
-`/healthz` / logging; UI solo en español.
+`/healthz` / logging; UI solo en español (→ Fase 5).
 
 ---
 
@@ -115,6 +115,28 @@ CLAUDE.md.
 
 ---
 
+## Fase 5 — Internacionalización de la UI (i18n)
+
+*Por qué al final: es transversal a toda la UI pero no añade motor de backend ni
+bloquea nada; conviene hacerlo cuando las features (y por tanto las cadenas de
+texto) ya están estables, para no traducir una UI que aún cambia. Mantiene el
+principio on-device: nada de servicios de traducción externos.*
+
+| #   | Entregable | Deps | Esf. | Riesgo |
+|-----|------------|------|------|--------|
+| 5.1 | **Catálogo de cadenas** (fuente de verdad única, p. ej. `frontend/static/i18n/{es,en}.json`); ninguna cadena hardcodeada en HTML/JS | — | M | Bajo |
+| 5.2 | **Selector de idioma** ES/EN en la UI, con detección del navegador y persistencia en `localStorage` | — | S | Bajo |
+
+**Dependencia interna:** 5.1 antes que 5.2 (el selector necesita el catálogo).
+**Nota de alcance:** solo UI. El contenido convertido (Markdown) y los mensajes
+de error del backend quedan fuera; si más adelante se quieren localizar los
+errores de API, sería un entregable aparte.
+**Hecho cuando:** la UI alterna ES/EN sin cadenas hardcodeadas, con ES por
+defecto y la elección persistida. Nuevos smoke-tests de frontend (reusan lo de
+0.4).
+
+---
+
 ## Cuestiones transversales (en cada fase)
 
 - **On-device:** nada de servicios externos por defecto (Whisper/tiktoken en local).
@@ -128,7 +150,8 @@ CLAUDE.md.
 
 ## Secuencia recomendada
 
-**0 → 1 → 2 → 3 → 4.** Si se prioriza impacto visible sobre blindaje, se puede
-adelantar la **Fase 1** dejando 0.3/0.4 (CI/tests) en paralelo. Lo único que
-**no** conviene retrasar es **0.1 (rate limiting)** si la instancia pública ya
-recibe tráfico.
+**0 → 1 → 2 → 3 → 4 → 5.** Si se prioriza impacto visible sobre blindaje, se
+puede adelantar la **Fase 1** dejando 0.3/0.4 (CI/tests) en paralelo. Lo único
+que **no** conviene retrasar es **0.1 (rate limiting)** si la instancia pública
+ya recibe tráfico. La **Fase 5 (i18n)** va la última a propósito: traducir la UI
+antes de que las features se estabilicen obliga a re-traducir.
