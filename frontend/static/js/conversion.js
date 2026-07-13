@@ -64,6 +64,8 @@ async function convertFiles() {
         if (anon.anonymize) {
             formData.append('anonymize', 'true');
             formData.append('anonymize_entities', anon.entities.join(','));
+            formData.append('pseudonymize', anon.pseudonymize ? 'true' : 'false');
+            formData.append('custom_terms', anon.customTerms || '');
         }
 
         const compact = document.getElementById('compactCheck')?.checked;

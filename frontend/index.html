@@ -102,6 +102,14 @@
                     <div id="anonymizeOptions" class="anonymize-options" hidden>
                         <p class="anonymize-hint">Selecciona qué quitar del Markdown resultante:</p>
                         <div id="anonymizeTypes" class="anonymize-types"></div>
+                        <label class="anonymize-type">
+                            <input type="checkbox" id="pseudonymizeCheck">
+                            <span>Etiquetas coherentes ([NOMBRE_1], [NOMBRE_2]…)</span>
+                        </label>
+                        <label class="anonymize-terms">
+                            <span>Términos a ocultar (uno por línea):</span>
+                            <textarea id="customTerms" rows="3" placeholder="Proyecto Fénix&#10;alias interno"></textarea>
+                        </label>
                     </div>
                 </div>
 

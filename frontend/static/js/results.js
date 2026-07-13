@@ -9,6 +9,15 @@ import {
     renderCompressionPanel,
 } from './tokens.js';
 import { showToast } from './toast.js';
+import { anonymizerLabels } from './anonymize.js';
+
+// Línea con el informe de anonimización {key: nº} de un resultado (si lo hay).
+function renderAnonReport(report) {
+    const entries = Object.entries(report || {});
+    if (!entries.length) return '';
+    const parts = entries.map(([k, n]) => `${n}× ${escapeHtml(anonymizerLabels[k] || k)}`);
+    return `<div class="anon-report">🕵️ Anonimizado: ${parts.join(', ')}</div>`;
+}
 
 const progressSection = document.getElementById('progressSection');
 const resultsSection = document.getElementById('resultsSection');
@@ -79,6 +88,7 @@ export function displayResults(data) {
                                 <div class="result-filename">${escapeHtml(result.markdown_filename)}${anonTag}</div>
                                 <div class="result-format">De: ${sourceIcon} ${escapeHtml(result.original_filename)} (${escapeHtml(result.format)})${elapsed}</div>
                                 ${renderTokenBadges(result.markdown_content, renderCompressionBadge(result.compacted, result.original_chars, result.markdown_content))}
+                                ${renderAnonReport(result.anonymization_report)}
                             </div>
                         </div>
                         <div class="result-actions">
@@ -123,10 +133,11 @@ function viewContent(index) {
     document.getElementById('modalStats').textContent =
         `${nf(chars)} caracteres · ${nf(words)} palabras · ${nf(lines)} líneas`;
 
-    // Carril lateral: compactación (si la hubo) + estimación de tokens
+    // Carril lateral: compactación (si la hubo) + estimación de tokens + informe de anonimización
     document.getElementById('modalRail').innerHTML =
         renderCompressionPanel(result.compacted, result.original_chars, text) +
-        renderTokenRail(text);
+        renderTokenRail(text) +
+        renderAnonReport(result.anonymization_report);
 
     const preview = document.getElementById('modalPreview');
     preview.textContent = text || '(Sin contenido de texto extraído)';

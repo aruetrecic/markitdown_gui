@@ -3,7 +3,14 @@ import zipfile
 
 from fastapi.testclient import TestClient
 
-from backend.main import MAX_FILE_SIZE, MAX_FILES_PER_BATCH, SUPPORTED_EXTENSIONS, app
+from backend.main import (
+    MAX_CUSTOM_TERMS,
+    MAX_FILE_SIZE,
+    MAX_FILES_PER_BATCH,
+    SUPPORTED_EXTENSIONS,
+    _parse_custom_terms,
+    app,
+)
 
 client = TestClient(app)
 
@@ -209,3 +216,12 @@ def test_filename_with_html_is_sanitized_in_response():
     assert "\x00" not in body["markdown_filename"]
     # Los <, >, etc. siguen presentes (es responsabilidad del cliente escaparlos al renderizar)
     assert "<img" in body["original_filename"]
+
+
+def test_parse_custom_terms_dedup_and_cap():
+    """Test _parse_custom_terms dedup, casing, and cap behavior."""
+    raw = "a,A\nb, b , " + ",".join(f"t{i}" for i in range(150))
+    out = _parse_custom_terms(raw)
+    assert out[0] == "a"  # first-seen casing kept
+    assert out.count("a") + out.count("A") == 1  # deduped case-insensitively
+    assert len(out) == MAX_CUSTOM_TERMS  # capped at 100
