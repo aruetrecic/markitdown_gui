@@ -1,6 +1,9 @@
 import io
+import logging
 import os
+import shutil
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 
@@ -29,6 +32,12 @@ RATE_LIMIT_TRUST_FORWARDED_FOR = os.getenv("RATE_LIMIT_TRUST_FORWARDED_FOR", "1"
 
 # Crear aplicación FastAPI
 app = FastAPI(title="MarkItDown GUI")
+
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+logger = logging.getLogger("markitdown_gui")
 
 
 def _client_ip(request: Request) -> str:
@@ -80,6 +89,23 @@ async def add_no_cache_headers(request: Request, call_next):
     """
     response = await call_next(request)
     response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Una línea estructurada por request: method, path, status, duración, IP."""
+    start = time.perf_counter()
+    response = await call_next(request)
+    dur_ms = (time.perf_counter() - start) * 1000
+    logger.info(
+        "request method=%s path=%s status=%s dur_ms=%.1f ip=%s",
+        request.method,
+        request.url.path,
+        response.status_code,
+        dur_ms,
+        _client_ip(request),
+    )
     return response
 
 
@@ -248,6 +274,21 @@ async def root():
 async def favicon():
     """Sirve el SVG como favicon también en /favicon.ico para clientes que no leen el <link>."""
     return FileResponse("frontend/static/favicon.svg", media_type="image/svg+xml")
+
+
+@app.get("/healthz")
+async def healthz():
+    """Readiness ligero: vivo + qué binarios de sistema hay. No carga modelos."""
+    return JSONResponse(
+        {
+            "status": "ok",
+            "version": app.version,
+            "checks": {
+                "tesseract": shutil.which("tesseract") is not None,
+                "ffmpeg": shutil.which("ffmpeg") is not None,
+            },
+        }
+    )
 
 
 @app.get("/api/supported-formats")
