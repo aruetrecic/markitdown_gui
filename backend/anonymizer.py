@@ -366,11 +366,44 @@ def _get_engines():
         return _engines
 
 
-def anonymize_text_with_report(text: str, entity_keys: list[str]) -> tuple[str, dict[str, int]]:
+def _make_counter_operator(tag_base: str, values_in_order: list[str]):
+    """Operador `custom`: cada valor distinto de `values_in_order` (los hallazgos
+    de este tipo, en orden de aparición en el texto) recibe un índice consistente
+    -> [tag_base_N]. El mapeo se precalcula (no tiene estado mutable durante las
+    llamadas de Presidio): el motor `AnonymizerEngine` invoca la lambda DOS veces
+    por hallazgo -- una en `Operator.validate()`, con el valor de sondeo fijo
+    "PII" (para comprobar que devuelve `str`), y otra real en `operate()` -- y
+    además procesa los hallazgos de atrás hacia adelante para no desplazar
+    offsets ya resueltos. Con un contador mutable ingenuo (incrementado en cada
+    llamada) esas dos particularidades desordenan y desplazan la numeración; con
+    un mapeo ya cerrado, el sondeo "PII" simplemente no encuentra entrada (usa el
+    tag sin numerar como fallback inocuo) y el orden de procesamiento no importa."""
+    seen: dict[str, int] = {}
+    for v in values_in_order:
+        norm = v.strip()
+        if norm not in seen:
+            seen[norm] = len(seen) + 1
+
+    def op(value: str) -> str:
+        idx = seen.get(value.strip())
+        if idx is None:
+            return f"[{tag_base}]"
+        return f"[{tag_base}_{idx}]"
+
+    return op
+
+
+def anonymize_text_with_report(
+    text: str, entity_keys: list[str], *, pseudonymize: bool = False
+) -> tuple[str, dict[str, int]]:
     """Anonimiza `text` y devuelve (texto, informe) con {key: nº} de las
     sustituciones realmente aplicadas (contadas desde el EngineResult de
     Presidio, ya resueltos los solapes). `entity_keys` son claves de
-    ENTITY_CONFIG; las desconocidas se ignoran."""
+    ENTITY_CONFIG; las desconocidas se ignoran.
+
+    Si `pseudonymize` es True, en lugar de una etiqueta fija (`[DNI]`) numera
+    cada valor distinto de forma consistente dentro de esta llamada
+    (`[DNI_1]`, `[DNI_2]`…)."""
     keys = [k for k in entity_keys if k in _BY_KEY]
     if not text or not keys:
         return text, {}
@@ -380,10 +413,27 @@ def anonymize_text_with_report(text: str, entity_keys: list[str]) -> tuple[str, 
     analyzer, anonymizer = _get_engines()
     entities = [_BY_KEY[k]["entity"] for k in keys]
     results = analyzer.analyze(text=text, language="es", entities=entities)
-    operators = {
-        _BY_KEY[k]["entity"]: OperatorConfig("replace", {"new_value": _BY_KEY[k]["tag"]})
-        for k in keys
-    }
+    if pseudonymize:
+        values_by_entity: dict[str, list[str]] = {}
+        for r in sorted(results, key=lambda r: r.start):
+            values_by_entity.setdefault(r.entity_type, []).append(text[r.start : r.end])
+        operators = {
+            _BY_KEY[k]["entity"]: OperatorConfig(
+                "custom",
+                {
+                    "lambda": _make_counter_operator(
+                        _BY_KEY[k]["tag"].strip("[]"),
+                        values_by_entity.get(_BY_KEY[k]["entity"], []),
+                    )
+                },
+            )
+            for k in keys
+        }
+    else:
+        operators = {
+            _BY_KEY[k]["entity"]: OperatorConfig("replace", {"new_value": _BY_KEY[k]["tag"]})
+            for k in keys
+        }
     engine_result = anonymizer.anonymize(text=text, analyzer_results=results, operators=operators)
     entity_to_key = {_BY_KEY[k]["entity"]: k for k in keys}
     report: dict[str, int] = {}

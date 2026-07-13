@@ -172,6 +172,22 @@ def test_anonymize_text_sigue_devolviendo_str():
     assert isinstance(out, str) and "[EMAIL]" in out
 
 
+# --- pseudonimización consistente (opcional) ---
+
+
+def test_pseudonimizacion_numera_valores_distintos():
+    txt = "DNI 12345678Z y DNI 87654321X en el mismo doc."
+    out, _ = anonymize_text_with_report(txt, ["dni_nie"], pseudonymize=True)
+    assert "[DNI_1]" in out and "[DNI_2]" in out
+    assert "[DNI]" not in out  # numerado, no tag fijo
+
+
+def test_pseudonimizacion_mismo_valor_misma_etiqueta():
+    txt = "Titular: 12345678Z ... beneficiario 12345678Z otra vez."
+    out, _ = anonymize_text_with_report(txt, ["dni_nie"], pseudonymize=True)
+    assert out.count("[DNI_1]") == 2 and "[DNI_2]" not in out
+
+
 # --- API ---
 
 

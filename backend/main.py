@@ -214,7 +214,7 @@ def _parse_entities(raw: str) -> list[str]:
 
 
 def _apply_anonymization(
-    text: str, anonymize: bool, entities: list[str]
+    text: str, anonymize: bool, entities: list[str], pseudonymize: bool = False
 ) -> tuple[str, dict[str, int]]:
     """Aplica anonimización si se pidió. Import perezoso de Presidio.
     Devuelve (texto, informe {key: nº})."""
@@ -222,7 +222,7 @@ def _apply_anonymization(
         return text, {}
     from backend.anonymizer import anonymize_text_with_report
 
-    return anonymize_text_with_report(text, entities)
+    return anonymize_text_with_report(text, entities, pseudonymize=pseudonymize)
 
 
 def _compact(text: str, enabled: bool) -> str:
@@ -349,6 +349,7 @@ async def convert_files(
     files: list[UploadFile] = File(...),
     anonymize: bool = Form(False),
     anonymize_entities: str = Form(""),
+    pseudonymize: bool = Form(False),
     compact: bool = Form(True),
 ):
     """
@@ -394,7 +395,9 @@ async def convert_files(
             try:
                 raw_text = _extract_markdown(tmp_path, file_extension)
                 filename_without_ext = _safe_filename(Path(file.filename or "").stem)
-                text_content, anon_report = _apply_anonymization(raw_text, anonymize, entities)
+                text_content, anon_report = _apply_anonymization(
+                    raw_text, anonymize, entities, pseudonymize
+                )
                 original_chars = len(text_content)
                 text_content = _compact(text_content, compact)
 
@@ -439,6 +442,7 @@ async def convert_single_file(
     file: UploadFile = File(...),
     anonymize: bool = Form(False),
     anonymize_entities: str = Form(""),
+    pseudonymize: bool = Form(False),
     compact: bool = Form(True),
 ):
     """Convertir un único archivo a Markdown"""
@@ -469,7 +473,9 @@ async def convert_single_file(
                     detail=f"OCR no disponible: {e}",
                 ) from e
             try:
-                text_content, anon_report = _apply_anonymization(raw_text, anonymize, entities)
+                text_content, anon_report = _apply_anonymization(
+                    raw_text, anonymize, entities, pseudonymize
+                )
             except (ImportError, OSError) as e:
                 raise HTTPException(
                     status_code=503,

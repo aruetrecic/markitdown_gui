@@ -34,12 +34,13 @@ export async function loadAnonymizerOptions() {
     }
 }
 
-// Lee el estado de anonimización: { anonymize, entities }
+// Lee el estado de anonimización: { anonymize, entities, pseudonymize }
 export function getAnonymizeSelection() {
     const check = document.getElementById('anonymizeCheck');
-    if (!check || !check.checked) return { anonymize: false, entities: [] };
+    if (!check || !check.checked) return { anonymize: false, entities: [], pseudonymize: false };
     const entities = Array.from(
         document.querySelectorAll('#anonymizeTypes input[type="checkbox"]:checked')
     ).map(el => el.value);
-    return { anonymize: entities.length > 0, entities };
+    const pseudonymize = document.getElementById('pseudonymizeCheck')?.checked || false;
+    return { anonymize: entities.length > 0, entities, pseudonymize };
 }
