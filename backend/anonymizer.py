@@ -434,33 +434,45 @@ def _fold(s: str) -> str:
     return "".join(unicodedata.normalize("NFKD", ch)[:1] or ch for ch in s).lower()
 
 
+def _term_pattern(term: str) -> str:
+    """Construye el fragmento de regex para un único término: literal
+    (`re.escape`, nunca interpretado como regex del usuario) sobre su forma
+    plegada, con `\\b` en cada extremo solo si ese extremo es alfanumérico."""
+    pattern = re.escape(_fold(term))
+    if term[:1].isalnum():
+        pattern = r"\b" + pattern
+    if term[-1:].isalnum():
+        pattern = pattern + r"\b"
+    return pattern
+
+
 def _redact_custom_terms(text: str, terms: list[str]) -> tuple[str, int]:
     """Redacta cada término de `terms` de forma LITERAL (nunca como regex del
     usuario -- riesgo de ReDoS en una instancia pública), sin distinguir
     mayúsculas ni tildes, con límites de palabra cuando el término empieza o
     acaba en carácter alfanumérico. Devuelve (texto, nº de sustituciones).
 
-    La búsqueda se hace sobre versiones "plegadas" (ver `_fold`) de texto y
-    término -- nunca se compila el término del usuario como regex más allá
-    de `re.escape` -- y las sustituciones se aplican sobre el texto original
-    en los mismos offsets, de atrás hacia adelante para no desplazarlos."""
-    count = 0
-    for term in terms:
-        t = term.strip()
-        if not t:
-            continue
-        pattern = re.escape(_fold(t))
-        if t[:1].isalnum():
-            pattern = r"\b" + pattern
-        if t[-1:].isalnum():
-            pattern = pattern + r"\b"
-        matches = list(re.finditer(pattern, _fold(text)))
-        if not matches:
-            continue
-        for m in reversed(matches):
-            text = text[: m.start()] + CUSTOM_TERMS_TAG + text[m.end() :]
-        count += len(matches)
-    return text, count
+    Pliega el documento UNA sola vez (`_fold` es 1:1 en longitud, así que los
+    offsets de una coincidencia sobre el texto plegado son válidos también
+    sobre el original) y compila una única regex que alterna todos los
+    términos ya escapados -- evita re-plegar el texto completo por cada
+    término (antes O(términos × len(texto)); un documento de varios MB con
+    una lista de 100 términos podía tardar decenas de segundos). Un solo
+    `re.finditer` sobre el texto plegado basta; las sustituciones se aplican
+    sobre el texto original en los mismos offsets, de atrás hacia adelante
+    para no desplazarlos."""
+    cleaned = [t.strip() for t in terms if t.strip()]
+    if not cleaned:
+        return text, 0
+
+    combined = re.compile("|".join(_term_pattern(t) for t in cleaned))
+    matches = list(combined.finditer(_fold(text)))
+    if not matches:
+        return text, 0
+
+    for m in reversed(matches):
+        text = text[: m.start()] + CUSTOM_TERMS_TAG + text[m.end() :]
+    return text, len(matches)
 
 
 def _anonymize_with_presidio(

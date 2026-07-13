@@ -243,6 +243,48 @@ def test_terminos_propios_combinado_con_presidio():
     assert report["custom_terms"] == 1
 
 
+def test_terminos_propios_multiples_solapados_y_adyacentes():
+    # "friend" contiene "end" como subcadena, pero al exigir \b en ambos
+    # extremos alfanuméricos, "end" no debe consumirse dentro de "friend"
+    # (el carácter previo a "end" ahí es alfanumérico -> sin frontera). El
+    # "end" independiente al final sí es una palabra completa y se redacta
+    # aparte. "Fenix" y "Proyecto" están separados solo por una coma
+    # (adyacentes, sin espacio) y ambos deben redactarse.
+    txt = "Fenix,Proyecto y tambien mi friend end"
+    out, report = anonymize_text_with_report(
+        txt, [], custom_terms=["fenix", "proyecto", "end", "friend"]
+    )
+    assert out.count("[OCULTO]") == 4
+    assert report["custom_terms"] == 4
+    assert "Fenix" not in out and "Proyecto" not in out and "friend" not in out
+    assert out == "[OCULTO],[OCULTO] y tambien mi [OCULTO] [OCULTO]"
+
+
+def test_terminos_propios_extremo_no_alfanumerico_sigue_siendo_literal():
+    # "C++": el extremo inicial ('C') es alfanumérico -> exige \b ahí; el
+    # extremo final ('+') no lo es -> sin \b esa banda. Debe seguir
+    # tratándose como cadena literal (el '+' no se interpreta como regex) y
+    # no debe redactar "C++" cuando aparece pegado a otro alfanumérico antes
+    # (viola la frontera de palabra inicial), aunque comparta el sufijo.
+    txt = "Usamos C++ en el proyecto, no confundir con XC++Y ni con Cpp"
+    out, report = anonymize_text_with_report(txt, [], custom_terms=["C++"])
+    assert out.count("[OCULTO]") == 1
+    assert report["custom_terms"] == 1
+    assert out == "Usamos [OCULTO] en el proyecto, no confundir con XC++Y ni con Cpp"
+
+
+def test_terminos_propios_punto_literal_no_regex_con_ambos_extremos_alfanumericos():
+    # "a.b": ambos extremos son alfanuméricos -> \b en los dos lados. El '.'
+    # debe tratarse literal (no "cualquier carácter"), así que "axb" -- que
+    # coincidiría si '.' fuera un comodín de regex -- no debe redactarse.
+    txt = "el valor es a.b aqui, no axb"
+    out, report = anonymize_text_with_report(txt, [], custom_terms=["a.b"])
+    assert out.count("[OCULTO]") == 1
+    assert report["custom_terms"] == 1
+    assert "axb" in out
+    assert "a.b" not in out
+
+
 def test_terminos_propios_vacios_no_generan_entrada_en_informe():
     out, report = anonymize_text_with_report("hola mundo", [], custom_terms=["noexiste", "  "])
     assert out == "hola mundo"
