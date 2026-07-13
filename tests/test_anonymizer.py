@@ -4,6 +4,8 @@ Las pruebas de email y DNI/NIE son deterministas. Las de PERSON/teléfono
 dependen del modelo spaCy; se marcan como tolerantes.
 """
 
+import re
+
 from fastapi.testclient import TestClient
 
 from backend.anonymizer import (
@@ -186,6 +188,25 @@ def test_pseudonimizacion_mismo_valor_misma_etiqueta():
     txt = "Titular: 12345678Z ... beneficiario 12345678Z otra vez."
     out, _ = anonymize_text_with_report(txt, ["dni_nie"], pseudonymize=True)
     assert out.count("[DNI_1]") == 2 and "[DNI_2]" not in out
+
+
+def test_pseudonimizacion_nunca_emite_tag_plano_con_valores_adyacentes():
+    # Dos DNIs distintos separados solo por un espacio: AnonymizerEngine puede
+    # fusionar los dos hallazgos adyacentes en un único span que no coincide
+    # con ninguna clave del mapa precalculado. La invariante es que, aun así,
+    # pseudonymize nunca debe caer al tag plano sin numerar.
+    txt = "DNI 12345678Z 87654321X aquí"
+    out, _ = anonymize_text_with_report(txt, ["dni_nie"], pseudonymize=True)
+    assert "12345678Z" not in out and "87654321X" not in out
+    assert "[DNI]" not in out  # nunca un tag plano sin numerar
+    assert re.search(r"\[DNI\](?!_)", out) is None
+
+
+def test_pseudonimizacion_numeracion_independiente_por_tipo():
+    txt = "DNI 12345678Z, correo a@x.com"
+    out, _ = anonymize_text_with_report(txt, ["dni_nie", "email"], pseudonymize=True)
+    assert "[DNI_1]" in out
+    assert "[EMAIL_1]" in out
 
 
 # --- API ---

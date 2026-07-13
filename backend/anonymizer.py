@@ -369,15 +369,18 @@ def _get_engines():
 def _make_counter_operator(tag_base: str, values_in_order: list[str]):
     """Operador `custom`: cada valor distinto de `values_in_order` (los hallazgos
     de este tipo, en orden de aparición en el texto) recibe un índice consistente
-    -> [tag_base_N]. El mapeo se precalcula (no tiene estado mutable durante las
-    llamadas de Presidio): el motor `AnonymizerEngine` invoca la lambda DOS veces
-    por hallazgo -- una en `Operator.validate()`, con el valor de sondeo fijo
-    "PII" (para comprobar que devuelve `str`), y otra real en `operate()` -- y
-    además procesa los hallazgos de atrás hacia adelante para no desplazar
-    offsets ya resueltos. Con un contador mutable ingenuo (incrementado en cada
-    llamada) esas dos particularidades desordenan y desplazan la numeración; con
-    un mapeo ya cerrado, el sondeo "PII" simplemente no encuentra entrada (usa el
-    tag sin numerar como fallback inocuo) y el orden de procesamiento no importa."""
+    -> [tag_base_N]. El mapeo se PREPUEBLA a partir del análisis (no tiene
+    estado mutable durante las llamadas de Presidio para el caso normal), pero
+    es local a esta llamada (dict nuevo por invocación: sin estado a nivel de
+    módulo) y puede CRECER dentro de `operate()` -- ver comentario en `op()`.
+
+    El motor `AnonymizerEngine` invoca la lambda DOS veces por hallazgo -- una
+    en `Operator.validate()`, con el valor de sondeo fijo "PII" (para comprobar
+    que devuelve `str`), y otra real en `operate()` -- y además procesa los
+    hallazgos de atrás hacia adelante para no desplazar offsets ya resueltos.
+    Con un contador mutable ingenuo (incrementado en cada llamada) esas dos
+    particularidades desordenan y desplazan la numeración; con un mapeo
+    prepoblado el sondeo "PII" y el orden de procesamiento no importan."""
     seen: dict[str, int] = {}
     for v in values_in_order:
         norm = v.strip()
@@ -385,9 +388,27 @@ def _make_counter_operator(tag_base: str, values_in_order: list[str]):
             seen[norm] = len(seen) + 1
 
     def op(value: str) -> str:
-        idx = seen.get(value.strip())
+        norm = value.strip()
+        idx = seen.get(norm)
         if idx is None:
-            return f"[{tag_base}]"
+            # `AnonymizerEngine.anonymize()` puede fusionar en Presidio dos
+            # hallazgos adyacentes del mismo tipo separados solo por espacio,
+            # o ajustar límites de spans solapados, antes de llamar a
+            # `operate()`. El valor resultante entonces no es una clave del
+            # mapa prepoblado (que se construyó a partir de los resultados
+            # crudos de `analyzer.analyze()`). En vez de caer a un tag plano
+            # sin numerar (rompería la garantía de integridad referencial de
+            # la pseudonimización), se le asigna aquí un índice nuevo y se
+            # guarda, de modo que repeticiones de ese mismo span fusionado
+            # sigan recibiendo la misma etiqueta numerada.
+            #
+            # El sondeo de validación de Presidio (ver docstring de la
+            # función) llama a `op("PII")` antes de cada hallazgo real; ese
+            # valor fijo también entra aquí y añade una entrada "PII"->N al
+            # mapa, pero nunca se emite en la salida real (el resultado del
+            # sondeo se descarta), así que es inocuo.
+            idx = len(seen) + 1
+            seen[norm] = idx
         return f"[{tag_base}_{idx}]"
 
     return op
