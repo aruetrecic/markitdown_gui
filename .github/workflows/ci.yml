@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar deps de sistema (OCR + audio)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr tesseract-ocr-spa tesseract-ocr-eng ffmpeg
+
+      - name: Instalar uv (con caché)
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Instalar Python 3.13
+        run: uv python install 3.13
+
+      - name: Sincronizar dependencias
+        run: uv sync --all-extras
+
+      - name: Ruff (lint)
+        run: uv run ruff check backend/ tests/
+
+      - name: Black (formato)
+        run: uv run black --check backend/ tests/
+
+      - name: Pytest
+        run: uv run --all-extras pytest

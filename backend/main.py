@@ -1,6 +1,9 @@
 import io
+import logging
 import os
+import shutil
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 
@@ -11,6 +14,9 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from markitdown import MarkItDown
 from pydantic import BaseModel, Field
+from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from backend import compactor, ocr, pdf_markdown
 
@@ -19,8 +25,81 @@ MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB por archivo
 MAX_FILES_PER_BATCH = 50
 MAX_FILENAME_LEN = 255
 
+# Rate limiting (instancia pública tras proxy Apache/Plesk).
+RATE_LIMIT_CONVERT = os.getenv("RATE_LIMIT_CONVERT", "20/minute")
+RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "1") != "0"
+RATE_LIMIT_TRUST_FORWARDED_FOR = os.getenv("RATE_LIMIT_TRUST_FORWARDED_FOR", "1") != "0"
+# Nº de proxies de confianza delante de la app (cada uno APPENDS la IP del
+# peer que vio a X-Forwarded-For). Debe coincidir con la topología real del
+# despliegue; por defecto 1 (el único Apache/Plesk delante de uvicorn).
+RATE_LIMIT_TRUSTED_PROXIES = int(os.getenv("RATE_LIMIT_TRUSTED_PROXIES", "1"))
+
 # Crear aplicación FastAPI
 app = FastAPI(title="MarkItDown GUI")
+
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+logger = logging.getLogger("markitdown_gui")
+
+
+def _client_ip(request: Request) -> str:
+    """IP real del cliente para rate limiting.
+
+    Tras el proxy Apache/Plesk, request.client.host es el proxy (una sola IP).
+    X-Forwarded-For se lee de DERECHA a izquierda, NUNCA la entrada más a la
+    izquierda: esa la escribe el propio cliente (o cualquiera antes del
+    primer proxy de confianza) y es totalmente falsificable — un atacante que
+    rote ese valor en cada request evadiría el límite por completo, no solo
+    "su propio" límite. Cada proxy de confianza en la cadena APPENDS (no
+    reemplaza) la IP del peer que vio, así que la IP real del cliente queda
+    exactamente a RATE_LIMIT_TRUSTED_PROXIES posiciones desde la derecha,
+    incluso si el cliente antepuso entradas falsas de su cosecha. Con un solo
+    proxy de confianza (el valor por defecto) se toma la última entrada.
+    RATE_LIMIT_TRUSTED_PROXIES debe coincidir con el número real de proxies
+    de confianza delante de la app o el cálculo del hop es incorrecto.
+    Si el header falta, está vacío o tiene menos partes que las esperadas,
+    cae a la IP directa de la conexión. Desactivable por env
+    (RATE_LIMIT_TRUST_FORWARDED_FOR=0) si el despliegue no es de confianza.
+    """
+    if RATE_LIMIT_TRUST_FORWARDED_FOR:
+        xff = request.headers.get("x-forwarded-for")
+        if xff:
+            parts = [p.strip() for p in xff.split(",") if p.strip()]
+            if len(parts) >= RATE_LIMIT_TRUSTED_PROXIES > 0:
+                return parts[-RATE_LIMIT_TRUSTED_PROXIES]
+    return get_remote_address(request)
+
+
+limiter = Limiter(key_func=_client_ip, enabled=RATE_LIMIT_ENABLED)
+app.state.limiter = limiter
+
+
+def _retry_after_seconds(exc: RateLimitExceeded) -> int:
+    """Ventana (en segundos) del límite superado, para el header Retry-After.
+
+    exc.limit es el `Limit` de slowapi cuyo .limit es un RateLimitItem de la
+    librería `limits`, con get_expiry() devolviendo la ventana en segundos.
+    Si la estructura cambiara y no se pudiera derivar, cae a un valor fijo
+    conservador en vez de omitir el header.
+    """
+    try:
+        return int(exc.limit.limit.get_expiry())
+    except AttributeError:
+        return 60
+
+
+async def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    """429 con JSON claro y Retry-After cuando se supera el límite."""
+    return JSONResponse(
+        status_code=429,
+        content={"detail": f"Rate limit exceeded: {exc.detail}"},
+        headers={"Retry-After": str(_retry_after_seconds(exc))},
+    )
+
+
+app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 
 # Comprime las respuestas (Markdown, JSON y estáticos de texto) cuando el cliente
 # acepta gzip. El Markdown y el CSS/JS comprimen mucho; ahorra ancho de banda de
@@ -42,6 +121,23 @@ async def add_no_cache_headers(request: Request, call_next):
     """
     response = await call_next(request)
     response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Una línea estructurada por request: method, path, status, duración, IP."""
+    start = time.perf_counter()
+    response = await call_next(request)
+    dur_ms = (time.perf_counter() - start) * 1000
+    logger.info(
+        "request method=%s path=%s status=%s dur_ms=%.1f ip=%s",
+        request.method,
+        request.url.path,
+        response.status_code,
+        dur_ms,
+        _client_ip(request),
+    )
     return response
 
 
@@ -212,6 +308,21 @@ async def favicon():
     return FileResponse("frontend/static/favicon.svg", media_type="image/svg+xml")
 
 
+@app.get("/healthz")
+async def healthz():
+    """Readiness ligero: vivo + qué binarios de sistema hay. No carga modelos."""
+    return JSONResponse(
+        {
+            "status": "ok",
+            "version": app.version,
+            "checks": {
+                "tesseract": shutil.which("tesseract") is not None,
+                "ffmpeg": shutil.which("ffmpeg") is not None,
+            },
+        }
+    )
+
+
 @app.get("/api/supported-formats")
 async def get_supported_formats():
     """Obtener lista de formatos soportados"""
@@ -229,6 +340,7 @@ async def get_anonymizer_options():
 
 
 @app.post("/api/convert")
+@limiter.limit(RATE_LIMIT_CONVERT)
 async def convert_files(
     request: Request,
     files: list[UploadFile] = File(...),
@@ -317,6 +429,7 @@ async def convert_files(
 
 
 @app.post("/api/convert-single")
+@limiter.limit(RATE_LIMIT_CONVERT)
 async def convert_single_file(
     request: Request,
     file: UploadFile = File(...),
@@ -412,6 +525,7 @@ def _unique_zip_name(name: str, taken: set[str]) -> str:
 
 
 @app.post("/api/zip")
+@limiter.limit(RATE_LIMIT_CONVERT)
 async def create_zip(request: Request, payload: ZipRequest):
     """Empaquetar varios .md generados por el cliente en un único zip."""
     _check_request_size(request)
