@@ -37,14 +37,34 @@ def _client_ip(request: Request) -> str:
     if RATE_LIMIT_TRUST_FORWARDED_FOR:
         xff = request.headers.get("x-forwarded-for")
         if xff:
-            return xff.split(",")[0].strip()  # leftmost = cliente original
+            parts = [p.strip() for p in xff.split(",") if p.strip()]
+            if len(parts) >= RATE_LIMIT_TRUSTED_PROXIES > 0:
+                return parts[-RATE_LIMIT_TRUSTED_PROXIES]  # rightmost hop de confianza
     return get_remote_address(request)
 ```
 
-Asunción: el proxy es de confianza (convención leftmost de `X-Forwarded-For`). Un
-cliente podría falsear la cabecera para evadir *su propio* límite; tras un proxy
-de confianza es el estándar aceptado y queda desactivable por env. En local sin
-proxy (sin cabecera) cae a la IP directa.
+**Riesgo corregido (hallazgo de la revisión final):** una implementación previa
+leía la entrada *leftmost* de `X-Forwarded-For`, asumiendo que era "el cliente
+original". Eso es incorrecto y explotable: la entrada más a la izquierda la
+escribe el propio cliente (es la primera que añade, antes de que la vea
+cualquier proxy) y es, por tanto, totalmente falsificable. El riesgo **no** se
+limita a que un cliente evada *su propio* límite — un atacante que rote ese
+valor izquierdo en cada request (`X-Forwarded-For: <random>, <ip-real>`) evade
+el limiter **por completo**, para cualquier IP, porque cada valor rotado se
+trata como una clave nueva. Esto se demostró empíricamente contra la app en
+ejecución.
+
+La corrección lee de **derecha a izquierda**: cada proxy de confianza en la
+cadena (aquí, el único Apache/Plesk delante de uvicorn) *añade* la IP del peer
+que vio a `X-Forwarded-For` en vez de sustituir nada, así que la IP real del
+cliente queda siempre a `RATE_LIMIT_TRUSTED_PROXIES` posiciones desde la
+derecha — sea cual sea la basura que el cliente haya antepuesto. Con 1 proxy de
+confianza (el default) es simplemente la última entrada. Si el header falta,
+está vacío o tiene menos partes que las esperadas, cae a `get_remote_address`
+(la IP directa de la conexión). `RATE_LIMIT_TRUSTED_PROXIES` debe coincidir con
+el número real de proxies de confianza delante de la app — si el despliegue
+añade o quita un salto (p. ej. un balanceador adicional), hay que actualizar
+esta constante o el cálculo del hop queda desalineado.
 
 **Fuentes de verdad / configuración** (constantes junto a las de hardening en
 `backend/main.py`, leídas de env con default):
@@ -54,6 +74,7 @@ proxy (sin cabecera) cae a la IP directa.
 | `RATE_LIMIT_CONVERT` | `RATE_LIMIT_CONVERT` | `"20/minute"` | Límite aplicado a los endpoints de conversión |
 | `RATE_LIMIT_ENABLED` | `RATE_LIMIT_ENABLED` | `1` (true) | Interruptor global (los tests lo apagan) |
 | `RATE_LIMIT_TRUST_FORWARDED_FOR` | `RATE_LIMIT_TRUST_FORWARDED_FOR` | `1` (true) | Si se lee `X-Forwarded-For` |
+| `RATE_LIMIT_TRUSTED_PROXIES` | `RATE_LIMIT_TRUSTED_PROXIES` | `1` | Nº de saltos de proxy de confianza; determina qué entrada de `X-Forwarded-For` (desde la derecha) se toma como IP real |
 
 **Integración FastAPI:** `Limiter(key_func=_client_ip, enabled=RATE_LIMIT_ENABLED)`
 en `app.state.limiter`; handler de `RateLimitExceeded` registrado que devuelve
