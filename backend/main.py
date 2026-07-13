@@ -1,6 +1,7 @@
 import io
 import logging
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -24,6 +25,7 @@ from backend import compactor, ocr, pdf_markdown
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB por archivo
 MAX_FILES_PER_BATCH = 50
 MAX_FILENAME_LEN = 255
+MAX_CUSTOM_TERMS = 100
 
 # Rate limiting (instancia pública tras proxy Apache/Plesk).
 RATE_LIMIT_CONVERT = os.getenv("RATE_LIMIT_CONVERT", "20/minute")
@@ -213,16 +215,37 @@ def _parse_entities(raw: str) -> list[str]:
     return [part.strip() for part in (raw or "").split(",") if part.strip()]
 
 
+def _parse_custom_terms(raw: str) -> list[str]:
+    """'a\nb, c' -> ['a', 'b', 'c'] (separados por línea o coma), sin
+    duplicados (case-insensitive) y con tope MAX_CUSTOM_TERMS."""
+    parts = re.split(r"[\n,]", raw or "")
+    seen: set[str] = set()
+    out: list[str] = []
+    for p in (x.strip() for x in parts):
+        if p and p.lower() not in seen:
+            seen.add(p.lower())
+            out.append(p)
+    return out[:MAX_CUSTOM_TERMS]
+
+
 def _apply_anonymization(
-    text: str, anonymize: bool, entities: list[str], pseudonymize: bool = False
+    text: str,
+    anonymize: bool,
+    entities: list[str],
+    pseudonymize: bool = False,
+    custom_terms: list[str] | None = None,
 ) -> tuple[str, dict[str, int]]:
     """Aplica anonimización si se pidió. Import perezoso de Presidio.
-    Devuelve (texto, informe {key: nº})."""
-    if not anonymize or not entities:
+    Devuelve (texto, informe {key: nº}). El interruptor maestro sigue siendo
+    `anonymize`, pero basta con tener entidades O términos propios (no hace
+    falta marcar ningún tipo de Presidio si solo se quieren ocultar términos
+    propios)."""
+    terms = custom_terms or []
+    if not anonymize or (not entities and not terms):
         return text, {}
     from backend.anonymizer import anonymize_text_with_report
 
-    return anonymize_text_with_report(text, entities, pseudonymize=pseudonymize)
+    return anonymize_text_with_report(text, entities, pseudonymize=pseudonymize, custom_terms=terms)
 
 
 def _compact(text: str, enabled: bool) -> str:
@@ -350,6 +373,7 @@ async def convert_files(
     anonymize: bool = Form(False),
     anonymize_entities: str = Form(""),
     pseudonymize: bool = Form(False),
+    custom_terms: str = Form(""),
     compact: bool = Form(True),
 ):
     """
@@ -360,6 +384,7 @@ async def convert_files(
         raise HTTPException(status_code=400, detail="No files provided")
 
     entities = _parse_entities(anonymize_entities)
+    terms = _parse_custom_terms(custom_terms)
 
     if len(files) > MAX_FILES_PER_BATCH:
         raise HTTPException(
@@ -396,7 +421,7 @@ async def convert_files(
                 raw_text = _extract_markdown(tmp_path, file_extension)
                 filename_without_ext = _safe_filename(Path(file.filename or "").stem)
                 text_content, anon_report = _apply_anonymization(
-                    raw_text, anonymize, entities, pseudonymize
+                    raw_text, anonymize, entities, pseudonymize, terms
                 )
                 original_chars = len(text_content)
                 text_content = _compact(text_content, compact)
@@ -408,7 +433,7 @@ async def convert_files(
                         "extension": file_extension,
                         "markdown_content": text_content,
                         "markdown_filename": f"{filename_without_ext}.md",
-                        "anonymized": bool(anonymize and entities),
+                        "anonymized": bool(anonymize and (entities or terms)),
                         "anonymization_report": anon_report,
                         "original_chars": original_chars,
                         "compacted": compact,
@@ -443,11 +468,13 @@ async def convert_single_file(
     anonymize: bool = Form(False),
     anonymize_entities: str = Form(""),
     pseudonymize: bool = Form(False),
+    custom_terms: str = Form(""),
     compact: bool = Form(True),
 ):
     """Convertir un único archivo a Markdown"""
     _check_request_size(request)
     entities = _parse_entities(anonymize_entities)
+    terms = _parse_custom_terms(custom_terms)
 
     try:
         file_extension = Path(file.filename or "").suffix.lower()
@@ -474,7 +501,7 @@ async def convert_single_file(
                 ) from e
             try:
                 text_content, anon_report = _apply_anonymization(
-                    raw_text, anonymize, entities, pseudonymize
+                    raw_text, anonymize, entities, pseudonymize, terms
                 )
             except (ImportError, OSError) as e:
                 raise HTTPException(
@@ -492,7 +519,7 @@ async def convert_single_file(
                     "extension": file_extension,
                     "markdown_content": text_content,
                     "markdown_filename": f"{filename_without_ext}.md",
-                    "anonymized": bool(anonymize and entities),
+                    "anonymized": bool(anonymize and (entities or terms)),
                     "anonymization_report": anon_report,
                     "original_chars": original_chars,
                     "compacted": compact,

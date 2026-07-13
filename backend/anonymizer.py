@@ -18,6 +18,7 @@ módulo no carga el modelo.
 from __future__ import annotations
 
 import re
+import unicodedata
 from threading import Lock
 
 # Configuración de tipos soportados. Fuente de verdad para el frontend y para el
@@ -117,10 +118,20 @@ _NAME_LABEL_RX = re.compile(
 _engines = None  # (analyzer, anonymizer) una vez inicializados
 _engines_lock = Lock()
 
+# Términos propios (1.3): redacción literal de términos que el usuario indica
+# manualmente (nombres de proyecto, alias internos...), aplicada DESPUÉS de
+# Presidio. Clave sintética -- no es una entidad de Presidio, así que no vive
+# en ENTITY_CONFIG, pero se expone en available_options() para que el
+# frontend pueda etiquetar la línea del informe.
+CUSTOM_TERMS_TAG = "[OCULTO]"
+CUSTOM_TERMS_KEY = "custom_terms"
+
 
 def available_options() -> list[dict]:
     """Lista de tipos disponibles para el frontend: [{key, label, default}]."""
-    return [{"key": e["key"], "label": e["label"], "default": e["default"]} for e in ENTITY_CONFIG]
+    opts = [{"key": e["key"], "label": e["label"], "default": e["default"]} for e in ENTITY_CONFIG]
+    opts.append({"key": CUSTOM_TERMS_KEY, "label": "Términos propios", "default": False})
+    return opts
 
 
 def _valid_dni_nie(text: str) -> bool:
@@ -414,21 +425,50 @@ def _make_counter_operator(tag_base: str, values_in_order: list[str]):
     return op
 
 
-def anonymize_text_with_report(
-    text: str, entity_keys: list[str], *, pseudonymize: bool = False
+def _fold(s: str) -> str:
+    """Pliega mayúsculas/minúsculas y tildes/diacríticos para comparar sin
+    distinguirlos (p.ej. 'Fénix' == 'fenix'). El mapeo es 1:1 en longitud
+    (se toma solo el carácter base de la descomposición NFKD, antes de las
+    marcas combinantes), así que los índices de una coincidencia hallada
+    sobre el texto plegado son válidos también sobre el texto original."""
+    return "".join(unicodedata.normalize("NFKD", ch)[:1] or ch for ch in s).lower()
+
+
+def _redact_custom_terms(text: str, terms: list[str]) -> tuple[str, int]:
+    """Redacta cada término de `terms` de forma LITERAL (nunca como regex del
+    usuario -- riesgo de ReDoS en una instancia pública), sin distinguir
+    mayúsculas ni tildes, con límites de palabra cuando el término empieza o
+    acaba en carácter alfanumérico. Devuelve (texto, nº de sustituciones).
+
+    La búsqueda se hace sobre versiones "plegadas" (ver `_fold`) de texto y
+    término -- nunca se compila el término del usuario como regex más allá
+    de `re.escape` -- y las sustituciones se aplican sobre el texto original
+    en los mismos offsets, de atrás hacia adelante para no desplazarlos."""
+    count = 0
+    for term in terms:
+        t = term.strip()
+        if not t:
+            continue
+        pattern = re.escape(_fold(t))
+        if t[:1].isalnum():
+            pattern = r"\b" + pattern
+        if t[-1:].isalnum():
+            pattern = pattern + r"\b"
+        matches = list(re.finditer(pattern, _fold(text)))
+        if not matches:
+            continue
+        for m in reversed(matches):
+            text = text[: m.start()] + CUSTOM_TERMS_TAG + text[m.end() :]
+        count += len(matches)
+    return text, count
+
+
+def _anonymize_with_presidio(
+    text: str, keys: list[str], *, pseudonymize: bool
 ) -> tuple[str, dict[str, int]]:
-    """Anonimiza `text` y devuelve (texto, informe) con {key: nº} de las
-    sustituciones realmente aplicadas (contadas desde el EngineResult de
-    Presidio, ya resueltos los solapes). `entity_keys` son claves de
-    ENTITY_CONFIG; las desconocidas se ignoran.
-
-    Si `pseudonymize` es True, en lugar de una etiqueta fija (`[DNI]`) numera
-    cada valor distinto de forma consistente dentro de esta llamada
-    (`[DNI_1]`, `[DNI_2]`…)."""
-    keys = [k for k in entity_keys if k in _BY_KEY]
-    if not text or not keys:
-        return text, {}
-
+    """Bloque Presidio (analyze + operators + anonymize) extraído para poder
+    ejecutarse solo cuando hay `keys`, sin duplicar lógica con la redacción
+    de términos propios."""
     from presidio_anonymizer.entities import OperatorConfig
 
     analyzer, anonymizer = _get_engines()
@@ -463,6 +503,42 @@ def anonymize_text_with_report(
         if key:
             report[key] = report.get(key, 0) + 1
     return engine_result.text, report
+
+
+def anonymize_text_with_report(
+    text: str,
+    entity_keys: list[str],
+    *,
+    pseudonymize: bool = False,
+    custom_terms: list[str] | None = None,
+) -> tuple[str, dict[str, int]]:
+    """Anonimiza `text` y devuelve (texto, informe) con {key: nº} de las
+    sustituciones realmente aplicadas (contadas desde el EngineResult de
+    Presidio, ya resueltos los solapes, más `custom_terms` para los términos
+    propios). `entity_keys` son claves de ENTITY_CONFIG; las desconocidas se
+    ignoran.
+
+    Si `pseudonymize` es True, en lugar de una etiqueta fija (`[DNI]`) numera
+    cada valor distinto de forma consistente dentro de esta llamada
+    (`[DNI_1]`, `[DNI_2]`…).
+
+    `custom_terms` (1.3) son cadenas literales suministradas por el usuario
+    que se redactan con `[OCULTO]` DESPUÉS de Presidio (nunca se interpretan
+    como regex). Funciona aunque `entity_keys` esté vacío, siempre que haya
+    al menos un término no vacío."""
+    keys = [k for k in entity_keys if k in _BY_KEY]
+    terms = [t for t in (custom_terms or []) if t.strip()]
+    if not text or (not keys and not terms):
+        return text, {}
+
+    report: dict[str, int] = {}
+    if keys:
+        text, report = _anonymize_with_presidio(text, keys, pseudonymize=pseudonymize)
+    if terms:
+        text, n = _redact_custom_terms(text, terms)
+        if n:
+            report[CUSTOM_TERMS_KEY] = n
+    return text, report
 
 
 def anonymize_text(text: str, entity_keys: list[str]) -> str:

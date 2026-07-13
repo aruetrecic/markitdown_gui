@@ -34,13 +34,21 @@ export async function loadAnonymizerOptions() {
     }
 }
 
-// Lee el estado de anonimización: { anonymize, entities, pseudonymize }
+// Lee el estado de anonimización: { anonymize, entities, pseudonymize, customTerms }
 export function getAnonymizeSelection() {
     const check = document.getElementById('anonymizeCheck');
-    if (!check || !check.checked) return { anonymize: false, entities: [], pseudonymize: false };
+    if (!check || !check.checked) {
+        return { anonymize: false, entities: [], pseudonymize: false, customTerms: '' };
+    }
     const entities = Array.from(
         document.querySelectorAll('#anonymizeTypes input[type="checkbox"]:checked')
     ).map(el => el.value);
     const pseudonymize = document.getElementById('pseudonymizeCheck')?.checked || false;
-    return { anonymize: entities.length > 0, entities, pseudonymize };
+    const customTerms = (document.getElementById('customTerms')?.value || '').trim();
+    return {
+        anonymize: entities.length > 0 || customTerms.length > 0,
+        entities,
+        pseudonymize,
+        customTerms,
+    };
 }

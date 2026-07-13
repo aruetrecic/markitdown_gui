@@ -209,6 +209,52 @@ def test_pseudonimizacion_numeracion_independiente_por_tipo():
     assert "[EMAIL_1]" in out
 
 
+# --- términos propios (redacción literal) ---
+
+
+def test_terminos_propios_literal_case_insensitive():
+    txt = "El proyecto Fénix y su alias fenix son secretos."
+    out, report = anonymize_text_with_report(txt, [], custom_terms=["Fénix"])
+    assert "Fénix" not in out and "fenix" not in out
+    assert out.count("[OCULTO]") == 2
+    assert report["custom_terms"] == 2
+
+
+def test_terminos_propios_se_tratan_literales_no_regex():
+    txt = "coste 100 y algo(.*) raro"
+    out, _ = anonymize_text_with_report(txt, [], custom_terms=[".*"])
+    # '.*' se trata literal: solo redacta la secuencia literal '.*'
+    assert out.count("[OCULTO]") == 1
+    assert "coste 100" in out  # no borró todo por interpretar regex
+
+
+def test_terminos_propios_funciona_sin_entidades_presidio():
+    out, report = anonymize_text_with_report("hola Fenix mundo", [], custom_terms=["fenix"])
+    assert out == "hola [OCULTO] mundo"
+    assert report == {"custom_terms": 1}
+
+
+def test_terminos_propios_combinado_con_presidio():
+    txt = "correo a@x.com, proyecto Fenix"
+    out, report = anonymize_text_with_report(txt, ["email"], custom_terms=["Fenix"])
+    assert "[EMAIL]" in out
+    assert "[OCULTO]" in out
+    assert report["email"] == 1
+    assert report["custom_terms"] == 1
+
+
+def test_terminos_propios_vacios_no_generan_entrada_en_informe():
+    out, report = anonymize_text_with_report("hola mundo", [], custom_terms=["noexiste", "  "])
+    assert out == "hola mundo"
+    assert "custom_terms" not in report
+
+
+def test_available_options_incluye_custom_terms():
+    opts = {o["key"]: o for o in available_options()}
+    assert opts["custom_terms"]["label"] == "Términos propios"
+    assert opts["custom_terms"]["default"] is False
+
+
 # --- API ---
 
 
@@ -257,4 +303,19 @@ def test_convert_single_sin_anonimizar_conserva_contenido():
     assert r.status_code == 200
     body = r.json()
     assert body.get("anonymized") is False
-    assert "ana@example.com" in body["markdown_content"]
+
+
+def test_convert_single_redacta_terminos_propios_sin_entidades():
+    # anonymize=true pero sin marcar ningún tipo de Presidio: debe funcionar
+    # solo con custom_terms (el master switch permite el camino terms-only).
+    r = client.post(
+        "/api/convert-single",
+        files={"file": ("c.txt", b"El proyecto Fenix sigue en marcha", "text/plain")},
+        data={"anonymize": "true", "anonymize_entities": "", "custom_terms": "Fenix"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["anonymized"] is True
+    assert "[OCULTO]" in body["markdown_content"]
+    assert "Fenix" not in body["markdown_content"]
+    assert body["anonymization_report"]["custom_terms"] == 1
