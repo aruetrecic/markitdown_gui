@@ -213,13 +213,16 @@ def _parse_entities(raw: str) -> list[str]:
     return [part.strip() for part in (raw or "").split(",") if part.strip()]
 
 
-def _apply_anonymization(text: str, anonymize: bool, entities: list[str]) -> str:
-    """Aplica anonimización si se pidió. Import perezoso de Presidio."""
+def _apply_anonymization(
+    text: str, anonymize: bool, entities: list[str]
+) -> tuple[str, dict[str, int]]:
+    """Aplica anonimización si se pidió. Import perezoso de Presidio.
+    Devuelve (texto, informe {key: nº})."""
     if not anonymize or not entities:
-        return text
-    from backend.anonymizer import anonymize_text
+        return text, {}
+    from backend.anonymizer import anonymize_text_with_report
 
-    return anonymize_text(text, entities)
+    return anonymize_text_with_report(text, entities)
 
 
 def _compact(text: str, enabled: bool) -> str:
@@ -391,7 +394,7 @@ async def convert_files(
             try:
                 raw_text = _extract_markdown(tmp_path, file_extension)
                 filename_without_ext = _safe_filename(Path(file.filename or "").stem)
-                text_content = _apply_anonymization(raw_text, anonymize, entities)
+                text_content, anon_report = _apply_anonymization(raw_text, anonymize, entities)
                 original_chars = len(text_content)
                 text_content = _compact(text_content, compact)
 
@@ -403,6 +406,7 @@ async def convert_files(
                         "markdown_content": text_content,
                         "markdown_filename": f"{filename_without_ext}.md",
                         "anonymized": bool(anonymize and entities),
+                        "anonymization_report": anon_report,
                         "original_chars": original_chars,
                         "compacted": compact,
                         "status": "success",
@@ -465,7 +469,7 @@ async def convert_single_file(
                     detail=f"OCR no disponible: {e}",
                 ) from e
             try:
-                text_content = _apply_anonymization(raw_text, anonymize, entities)
+                text_content, anon_report = _apply_anonymization(raw_text, anonymize, entities)
             except (ImportError, OSError) as e:
                 raise HTTPException(
                     status_code=503,
@@ -483,6 +487,7 @@ async def convert_single_file(
                     "markdown_content": text_content,
                     "markdown_filename": f"{filename_without_ext}.md",
                     "anonymized": bool(anonymize and entities),
+                    "anonymization_report": anon_report,
                     "original_chars": original_chars,
                     "compacted": compact,
                     "status": "success",

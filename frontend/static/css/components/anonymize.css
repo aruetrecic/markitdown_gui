@@ -70,3 +70,10 @@
     background: var(--color-primary-soft);
     vertical-align: middle;
 }
+
+/* Línea de informe de anonimización {tipo: nº} bajo un resultado o en el carril del modal */
+.anon-report {
+    margin-top: var(--space-2);
+    font-size: 0.8rem;
+    color: var(--color-fg-subtle);
+}

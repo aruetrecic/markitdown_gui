@@ -2,6 +2,10 @@
 import { fetchAnonymizerOptions } from './api.js';
 import { escapeHtml } from './utils.js';
 
+// Mapa key -> label de los tipos anonimizables, para renderizar el informe
+// de resultados sin volver a llamar al endpoint (poblado por loadAnonymizerOptions).
+export const anonymizerLabels = {};
+
 // Cargar tipos de datos anonimizables y montar las casillas (según su `default`).
 // La caja de opciones se muestra/oculta con el atributo `hidden` al marcar el toggle.
 export async function loadAnonymizerOptions() {
@@ -15,6 +19,7 @@ export async function loadAnonymizerOptions() {
 
     try {
         const data = await fetchAnonymizerOptions();
+        (data.options || []).forEach(opt => { anonymizerLabels[opt.key] = opt.label; });
         typesBox.innerHTML = (data.options || [])
             .map(opt => `
                 <label class="anonymize-type">

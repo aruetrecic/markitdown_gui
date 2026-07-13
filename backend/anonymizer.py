@@ -366,24 +366,38 @@ def _get_engines():
         return _engines
 
 
-def anonymize_text(text: str, entity_keys: list[str]) -> str:
-    """Reemplaza en `text` las entidades pedidas por su etiqueta.
-
-    `entity_keys` son claves de ENTITY_CONFIG; las desconocidas se ignoran.
-    Si no hay texto o no hay claves válidas, devuelve el texto sin cambios.
-    """
+def anonymize_text_with_report(text: str, entity_keys: list[str]) -> tuple[str, dict[str, int]]:
+    """Anonimiza `text` y devuelve (texto, informe) con {key: nº} de las
+    sustituciones realmente aplicadas (contadas desde el EngineResult de
+    Presidio, ya resueltos los solapes). `entity_keys` son claves de
+    ENTITY_CONFIG; las desconocidas se ignoran."""
     keys = [k for k in entity_keys if k in _BY_KEY]
     if not text or not keys:
-        return text
+        return text, {}
 
     from presidio_anonymizer.entities import OperatorConfig
 
     analyzer, anonymizer = _get_engines()
     entities = [_BY_KEY[k]["entity"] for k in keys]
-
     results = analyzer.analyze(text=text, language="es", entities=entities)
     operators = {
         _BY_KEY[k]["entity"]: OperatorConfig("replace", {"new_value": _BY_KEY[k]["tag"]})
         for k in keys
     }
-    return anonymizer.anonymize(text=text, analyzer_results=results, operators=operators).text
+    engine_result = anonymizer.anonymize(text=text, analyzer_results=results, operators=operators)
+    entity_to_key = {_BY_KEY[k]["entity"]: k for k in keys}
+    report: dict[str, int] = {}
+    for item in engine_result.items:
+        key = entity_to_key.get(item.entity_type)
+        if key:
+            report[key] = report.get(key, 0) + 1
+    return engine_result.text, report
+
+
+def anonymize_text(text: str, entity_keys: list[str]) -> str:
+    """Wrapper de compatibilidad: solo el texto anonimizado.
+
+    `entity_keys` son claves de ENTITY_CONFIG; las desconocidas se ignoran.
+    Si no hay texto o no hay claves válidas, devuelve el texto sin cambios.
+    """
+    return anonymize_text_with_report(text, entity_keys)[0]

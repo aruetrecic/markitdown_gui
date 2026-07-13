@@ -11,6 +11,7 @@ from backend.anonymizer import (
     _valid_dni_nie,
     _valid_nss,
     anonymize_text,
+    anonymize_text_with_report,
     available_options,
 )
 from backend.main import app
@@ -148,6 +149,29 @@ def test_anonymize_fecha():
     assert "[FECHA]" in out and "12/01/2024" not in out
 
 
+# --- anonymize_text_with_report (informe de conteos) ---
+
+
+def test_report_cuenta_por_tipo():
+    txt = "correos a@x.com y b@y.com; DNI 12345678Z."
+    out, report = anonymize_text_with_report(txt, ["email", "dni_nie"])
+    assert "[EMAIL]" in out and "[DNI]" in out
+    assert report["email"] == 2
+    assert report["dni_nie"] == 1
+    assert "person" not in report  # tipos con 0 no aparecen
+
+
+def test_report_vacio_sin_entidades():
+    out, report = anonymize_text_with_report("hola", [])
+    assert out == "hola" and report == {}
+
+
+def test_anonymize_text_sigue_devolviendo_str():
+    # el wrapper de compatibilidad no se rompe
+    out = anonymize_text("correo a@x.com", ["email"])
+    assert isinstance(out, str) and "[EMAIL]" in out
+
+
 # --- API ---
 
 
@@ -169,6 +193,23 @@ def test_convert_single_anonymiza_email():
     assert body["anonymized"] is True
     assert "[EMAIL]" in body["markdown_content"]
     assert "ana@example.com" not in body["markdown_content"]
+
+
+def test_convert_single_incluye_informe_de_anonimizacion():
+    r = client.post(
+        "/api/convert-single",
+        files={
+            "file": (
+                "c.txt",
+                b"correos a@x.com y b@y.com",
+                "text/plain",
+            )
+        },
+        data={"anonymize": "true", "anonymize_entities": "email"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["anonymization_report"]["email"] == 2
 
 
 def test_convert_single_sin_anonimizar_conserva_contenido():
