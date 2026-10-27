@@ -126,6 +126,11 @@ _engines_lock = Lock()
 CUSTOM_TERMS_TAG = "[OCULTO]"
 CUSTOM_TERMS_KEY = "custom_terms"
 
+# spaCy rechaza textos > nlp.max_length (1M chars) y su memoria crece con la
+# longitud; el análisis se hace por trozos de este tamaño (cortando en salto de
+# línea) y la sustitución sobre el texto completo.
+ANALYZE_CHUNK_CHARS = 100_000
+
 
 def available_options() -> list[dict]:
     """Lista de tipos disponibles para el frontend: [{key, label, default}]."""
@@ -475,6 +480,35 @@ def _redact_custom_terms(text: str, terms: list[str]) -> tuple[str, int]:
     return text, len(matches)
 
 
+def _chunk_spans(text: str, size: int) -> list[tuple[int, int]]:
+    """Parte `text` en tramos [inicio, fin) de como mucho `size` chars, cortando
+    en el último salto de línea del tramo cuando lo hay."""
+    # ponytail: sin salto de línea en `size` chars se corta en seco y una entidad
+    # justo en el corte puede escaparse; solapar tramos si llega a pasar.
+    spans = []
+    start = 0
+    while start < len(text):
+        end = min(start + size, len(text))
+        if end < len(text):
+            nl = text.rfind("\n", start, end)
+            if nl > start:
+                end = nl + 1
+        spans.append((start, end))
+        start = end
+    return spans
+
+
+def _analyze(analyzer, text: str, entities: list[str]) -> list:
+    """`analyzer.analyze` por tramos, con offsets reubicados al texto completo."""
+    results = []
+    for start, end in _chunk_spans(text, ANALYZE_CHUNK_CHARS):
+        for r in analyzer.analyze(text=text[start:end], language="es", entities=entities):
+            r.start += start
+            r.end += start
+            results.append(r)
+    return results
+
+
 def _anonymize_with_presidio(
     text: str, keys: list[str], *, pseudonymize: bool
 ) -> tuple[str, dict[str, int]]:
@@ -485,7 +519,7 @@ def _anonymize_with_presidio(
 
     analyzer, anonymizer = _get_engines()
     entities = [_BY_KEY[k]["entity"] for k in keys]
-    results = analyzer.analyze(text=text, language="es", entities=entities)
+    results = _analyze(analyzer, text, entities)
     if pseudonymize:
         values_by_entity: dict[str, list[str]] = {}
         for r in sorted(results, key=lambda r: r.start):

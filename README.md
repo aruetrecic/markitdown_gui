@@ -56,7 +56,7 @@ Va más allá de la conversión: **OCR** del texto de imágenes con Tesseract, *
 ### 1. Clonar el proyecto
 
 ```bash
-git clone https://github.com/aruetre/markitdown_gui.git
+git clone https://github.com/aruetrecic/markitdown_gui.git
 cd markitdown_gui
 ```
 
@@ -126,7 +126,7 @@ Para servirla en un (sub)dominio con HTTPS, la app corre como servicio local (uv
 
 ```bash
 # 1. Instalar en el servidor (ej. en /opt)
-cd /opt && sudo git clone https://github.com/aruetre/markitdown_gui.git
+cd /opt && sudo git clone https://github.com/aruetrecic/markitdown_gui.git
 sudo chown -R $USER:$USER markitdown_gui && cd markitdown_gui
 ./install-ubuntu.sh
 
@@ -154,7 +154,7 @@ En los VPS/Servidores de IONOS con **Plesk** la ruta del (sub)dominio es del tip
 
 ```bash
 # Como root, con el subdominio ya creado en el panel de Plesk
-cd /tmp && git clone https://github.com/aruetre/markitdown_gui.git
+cd /tmp && git clone https://github.com/aruetrecic/markitdown_gui.git
 sudo bash /tmp/markitdown_gui/deploy/install-ionos-plesk.sh
 # (puerto a medida:  sudo PORT=8011 bash .../install-ionos-plesk.sh)
 ```
@@ -416,7 +416,7 @@ Este proyecto usa [MarkItDown](https://github.com/microsoft/markitdown) que est�
 
 **Antonio Rueda** — [@aruetre](https://github.com/aruetre) · antonio.rueda@gmail.com
 
-Repositorio: <https://github.com/aruetre/markitdown_gui>
+Repositorio: <https://github.com/aruetrecic/markitdown_gui>
 
 ## 🙏 Créditos
 

@@ -361,3 +361,30 @@ def test_convert_single_redacta_terminos_propios_sin_entidades():
     assert "[OCULTO]" in body["markdown_content"]
     assert "Fenix" not in body["markdown_content"]
     assert body["anonymization_report"]["custom_terms"] == 1
+
+
+# --- Textos largos: análisis por tramos (spaCy no admite > 1M chars) ---
+
+
+def test_chunk_spans_cubre_todo_y_respeta_tamano():
+    from backend.anonymizer import _chunk_spans
+
+    text = ("linea corta\n" * 50) + ("x" * 300)  # incluye un tramo sin saltos
+    spans = _chunk_spans(text, 100)
+    assert spans[0][0] == 0 and spans[-1][1] == len(text)
+    assert all(a[1] == b[0] for a, b in zip(spans, spans[1:], strict=False))  # contiguos
+    assert all(0 < end - start <= 100 for start, end in spans)
+    assert text[spans[0][1] - 1] == "\n"  # corta en salto de línea si puede
+
+
+def test_texto_largo_se_analiza_por_tramos_con_offsets_correctos(monkeypatch):
+    import backend.anonymizer as anon
+
+    monkeypatch.setattr(anon, "ANALYZE_CHUNK_CHARS", 60)
+    relleno = "texto sin datos personales aqui\n" * 5
+    text = f"DNI 12345678Z\n{relleno}correo a@b.com\n{relleno}otra vez 12345678Z\n"
+    out, report = anonymize_text_with_report(text, ["dni_nie", "email"], pseudonymize=True)
+    assert "12345678Z" not in out and "a@b.com" not in out
+    assert out.count("[DNI_1]") == 2  # misma etiqueta en tramos distintos
+    assert "[EMAIL_1]" in out
+    assert report == {"dni_nie": 2, "email": 1}
