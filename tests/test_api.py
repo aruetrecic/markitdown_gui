@@ -225,3 +225,71 @@ def test_parse_custom_terms_dedup_and_cap():
     assert out[0] == "a"  # first-seen casing kept
     assert out.count("a") + out.count("A") == 1  # deduped case-insensitively
     assert len(out) == MAX_CUSTOM_TERMS  # capped at 100
+
+
+# --- ZIP bomb: límites de lo descomprimido (zip/docx/xlsx/pptx/epub) ---
+
+
+def _zip_bytes(members: dict[str, bytes]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, data in members.items():
+            zf.writestr(name, data)
+    return buf.getvalue()
+
+
+def test_zip_normal_se_convierte():
+    data = _zip_bytes({"a.txt": b"hola mundo"})
+    r = client.post("/api/convert-single", files={"file": ("ok.zip", data, "application/zip")})
+    assert r.status_code == 200
+    assert "hola mundo" in r.json()["markdown_content"]
+
+
+def test_zip_que_descomprime_demasiado_413(monkeypatch):
+    import backend.main as main
+
+    monkeypatch.setattr(main, "MAX_UNZIPPED_SIZE", 1000)
+    data = _zip_bytes({"a.txt": b"0" * 2000})  # comprime a pocos bytes
+    r = client.post("/api/convert-single", files={"file": ("bomb.zip", data, "application/zip")})
+    assert r.status_code == 413
+
+
+def test_zip_con_demasiados_miembros_413(monkeypatch):
+    import backend.main as main
+
+    monkeypatch.setattr(main, "MAX_ZIP_MEMBERS", 3)
+    data = _zip_bytes({f"{i}.txt": b"x" for i in range(4)})
+    r = client.post("/api/convert-single", files={"file": ("many.zip", data, "application/zip")})
+    assert r.status_code == 413
+
+
+def test_zip_anidado_cuenta_en_el_presupuesto_y_la_profundidad(monkeypatch):
+    import backend.main as main
+
+    # Anidado sin extensión .zip: se detecta por contenido, no por nombre.
+    inner = _zip_bytes({"a.txt": b"0" * 2000})
+    monkeypatch.setattr(main, "MAX_UNZIPPED_SIZE", 2000 + len(inner) + 100)
+    data = _zip_bytes({"datos.bin": inner, "b.txt": b"0" * 200})
+    r = client.post("/api/convert-single", files={"file": ("n.zip", data, "application/zip")})
+    assert r.status_code == 413
+
+    monkeypatch.undo()
+    deep = b"fin"
+    for _ in range(main.MAX_ZIP_DEPTH + 1):
+        deep = _zip_bytes({"x.zip": deep})
+    r = client.post("/api/convert-single", files={"file": ("deep.zip", deep, "application/zip")})
+    assert r.status_code == 413
+
+
+def test_zip_bomb_en_lote_va_a_errors(monkeypatch):
+    import backend.main as main
+
+    monkeypatch.setattr(main, "MAX_UNZIPPED_SIZE", 1000)
+    files = [
+        ("files", ("bomb.zip", _zip_bytes({"a.txt": b"0" * 2000}), "application/zip")),
+        ("files", ("ok.txt", b"hola", "text/plain")),
+    ]
+    r = client.post("/api/convert", files=files)
+    body = r.json()
+    assert r.status_code == 200 and body["successful"] == 1
+    assert "too large" in body["errors"][0]["error"]

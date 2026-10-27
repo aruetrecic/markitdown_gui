@@ -1,3 +1,4 @@
+import asyncio
 import io
 import logging
 import os
@@ -26,6 +27,11 @@ MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB por archivo
 MAX_FILES_PER_BATCH = 50
 MAX_FILENAME_LEN = 255
 MAX_CUSTOM_TERMS = 100
+# Contenedores ZIP (zip/docx/xlsx/pptx/epub): tope de lo descomprimido, sumando
+# los ZIP anidados, para que un ZIP bomb no agote RAM/disco dentro de MarkItDown.
+MAX_UNZIPPED_SIZE = 200 * 1024 * 1024
+MAX_ZIP_MEMBERS = 1000
+MAX_ZIP_DEPTH = 3
 
 # Rate limiting (instancia pública tras proxy Apache/Plesk).
 RATE_LIMIT_CONVERT = os.getenv("RATE_LIMIT_CONVERT", "20/minute")
@@ -184,6 +190,45 @@ class _FileTooLarge(Exception):
     """El upload supera MAX_FILE_SIZE (detectado al vuelo durante el streaming)."""
 
 
+class _ArchiveTooLarge(Exception):
+    """El contenedor ZIP descomprimido supera MAX_UNZIPPED_SIZE / MAX_ZIP_MEMBERS /
+    MAX_ZIP_DEPTH."""
+
+
+def _check_archive(source, budget: list[int] | None = None, depth: int = 0) -> None:
+    """Valida un ZIP (y sus ZIP anidados) contra los límites ANTES de que
+    MarkItDown lo descomprima: su ZipConverter lee cada miembro entero a RAM y
+    recursa en los anidados (p. ej. 42.zip).
+
+    Basta con los tamaños declarados (`file_size`): `zipfile` nunca entrega más
+    bytes de los declarados, así que mentir en la cabecera no amplía lo que se
+    descomprime. Los anidados se detectan por contenido (firma `PK\\x03\\x04`),
+    no por extensión, porque MarkItDown también adivina el tipo por contenido.
+    `budget` = [bytes restantes, miembros restantes], compartido en la recursión.
+    """
+    if budget is None:
+        budget = [MAX_UNZIPPED_SIZE, MAX_ZIP_MEMBERS]
+    too_large = _ArchiveTooLarge(
+        f"Archive too large when decompressed (max {MAX_UNZIPPED_SIZE // (1024 * 1024)} MB, "
+        f"{MAX_ZIP_MEMBERS} files, {MAX_ZIP_DEPTH} nesting levels)"
+    )
+    with zipfile.ZipFile(source) as zf:
+        for info in zf.infolist():
+            budget[0] -= info.file_size
+            budget[1] -= 1
+            if budget[0] < 0 or budget[1] < 0:
+                raise too_large
+            try:
+                with zf.open(info) as member:
+                    if member.read(4) != b"PK\x03\x04":
+                        continue
+            except (RuntimeError, NotImplementedError):
+                continue  # cifrado / compresión no soportada: MarkItDown tampoco lo abrirá
+            if depth + 1 >= MAX_ZIP_DEPTH:
+                raise too_large
+            _check_archive(io.BytesIO(zf.read(info)), budget, depth + 1)
+
+
 async def _stream_to_tempfile(file: UploadFile, suffix: str) -> str:
     """Vuelca el upload a un archivo temporal por trozos, sin cargarlo entero en
     memoria, aplicando el límite de tamaño mientras se escribe.
@@ -280,6 +325,8 @@ def _extract_markdown(tmp_path: str, file_extension: str) -> str:
         if text.strip():
             return text
         # Fallback: pymupdf4llm no disponible / falló / sin contenido.
+    if zipfile.is_zipfile(tmp_path):
+        _check_archive(tmp_path)
     return md.convert(tmp_path).text_content
 
 
@@ -418,13 +465,13 @@ async def convert_files(
                 continue
 
             try:
-                raw_text = _extract_markdown(tmp_path, file_extension)
+                raw_text = await asyncio.to_thread(_extract_markdown, tmp_path, file_extension)
                 filename_without_ext = _safe_filename(Path(file.filename or "").stem)
-                text_content, anon_report = _apply_anonymization(
-                    raw_text, anonymize, entities, pseudonymize, terms
+                text_content, anon_report = await asyncio.to_thread(
+                    _apply_anonymization, raw_text, anonymize, entities, pseudonymize, terms
                 )
                 original_chars = len(text_content)
-                text_content = _compact(text_content, compact)
+                text_content = await asyncio.to_thread(_compact, text_content, compact)
 
                 results.append(
                     {
@@ -493,15 +540,17 @@ async def convert_single_file(
         try:
             filename_without_ext = _safe_filename(Path(file.filename or "").stem)
             try:
-                raw_text = _extract_markdown(tmp_path, file_extension)
+                raw_text = await asyncio.to_thread(_extract_markdown, tmp_path, file_extension)
+            except _ArchiveTooLarge as e:
+                raise HTTPException(status_code=413, detail=str(e)) from None
             except (ImportError, OSError) as e:
                 raise HTTPException(
                     status_code=503,
                     detail=f"OCR no disponible: {e}",
                 ) from e
             try:
-                text_content, anon_report = _apply_anonymization(
-                    raw_text, anonymize, entities, pseudonymize, terms
+                text_content, anon_report = await asyncio.to_thread(
+                    _apply_anonymization, raw_text, anonymize, entities, pseudonymize, terms
                 )
             except (ImportError, OSError) as e:
                 raise HTTPException(
@@ -510,7 +559,7 @@ async def convert_single_file(
                 ) from e
 
             original_chars = len(text_content)
-            text_content = _compact(text_content, compact)
+            text_content = await asyncio.to_thread(_compact, text_content, compact)
 
             return JSONResponse(
                 {
