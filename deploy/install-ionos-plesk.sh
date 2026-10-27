@@ -29,7 +29,7 @@ _here="$(cd "$(dirname "$0")" && pwd)"
 # --- Configuración (ajústala si reutilizas el script en otro dominio) --------
 DOMAIN="${DOMAIN:-md.tudominio.es}"
 BASE_DIR="${BASE_DIR:-/var/www/vhosts/tudominio.es/md.tudominio.es}"
-REPO_URL="${REPO_URL:-https://github.com/aruetre/markitdown_gui.git}"
+REPO_URL="${REPO_URL:-https://github.com/aruetrecic/markitdown_gui.git}"
 PORT="${PORT:-8000}"
 SERVICE="${SERVICE:-markitdown}"
 
